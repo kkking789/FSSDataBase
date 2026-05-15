@@ -142,8 +142,6 @@ def BoundarySet(app: Hfss, unit: Unit):
         reverse_v=True
     )
 
-
-
 def SetSolution(app: Hfss, freqs: list, points: int = 50, angles: list = None):
     setup = app.create_setup("Setup1")
     sweep = None
@@ -178,5 +176,23 @@ def SetSolution(app: Hfss, freqs: list, points: int = 50, angles: list = None):
                 step=angle[2],
             )
 
+def SetMaterial(app: Hfss, name: str, permittivity: float, dielectric_loss_tangent: float, permeability: float = 1):
+    material = app.materials.add_material(name)
+    material.permittivity = permittivity
+    material.permeability = permeability
+    material.dielectric_loss_tangent = dielectric_loss_tangent
 
+def SubstrateSet(app: Hfss, unit: Unit, material: list):
+    modeler = app.modeler
+    d = unit.size*2
+    subH = unit.subH
+    bias = 0
+    subs = []
+    for idx in range(unit.layer_num):
+        sub = modeler.create_box([f"-{d/2}mm", f"-{d/2}mm", f"{bias}mm"], [f"{d}mm", f"{d}mm", f"{subH}mm"],
+                                       name=f"sub{idx}", material=f"{material[idx]}")
+        bias += subH
+        subs.append(sub)
+
+    return subs
 
