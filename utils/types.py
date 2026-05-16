@@ -28,3 +28,15 @@ class Config3:
     bend: Control
     strategy: Control
     branch: Control
+
+@dataclass
+class Material:
+    name: str
+    permittivity: float
+    permeability: float
+    dielectric_loss_tangent: float
+
+@dataclass
+class Substrate:
+    material: Material
+    h: float
