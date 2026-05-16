@@ -10,7 +10,6 @@ class Unit:
     size: int
     wire_width: float
     layer_num: int
-    subH: float
 
 @dataclass
 class Config1:
