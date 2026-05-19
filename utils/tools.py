@@ -7,12 +7,13 @@ from ansys.aedt.core import Hfss
 from ansys.aedt.core.modules import variation
 from ansys.aedt.core.visualization.post.solution_data import SolutionData
 
-from BasicGenerate import *
 from PIL import Image, ImageDraw
 from ansys.aedt.core.generic.constants import Axis
 from utils import *
+from utils.types import *
 import time
 import numpy as np
+import math
 
 
 class Operation:
@@ -39,13 +40,13 @@ class Operation:
         self.path = path+fr"\{self.idx}"
         os.makedirs(self.path, exist_ok=True)
 
-    def DrawGroup1(self, data: list):
+    def DrawGroup1(self, data: list, Zbias:float = 0):
         self.data = data
         modeler = self.modeler
         idx = 0
         rect_list = []
         width = self.unit.wire_width
-        Zbias = self.Zbias
+        self.Zbias = Zbias
 
         for item in self.data:
             begin = item[0]
@@ -55,13 +56,12 @@ class Operation:
             cs = modeler.create_coordinate_system(
                 origin=pivot,
                 reference_cs="Global",
-                name="RotatePivotCS",
+                name=f"RotatePivotCS{idx}",
                 mode="axis",
                 x_pointing=[1, 0, 0],
                 y_pointing=[0, 1, 0],
             )
-            old_cs = modeler.get_working_coordinate_system()
-            modeler.set_working_coordinate_system("RotatePivotCS")
+            modeler.set_working_coordinate_system(f"RotatePivotCS{idx}")
             if idx == 0:
                 rect_name = "metal"
             else:
@@ -75,9 +75,9 @@ class Operation:
                 angle=angle,
                 units="deg"
             )
-            modeler.set_working_coordinate_system(old_cs)
+            modeler.set_working_coordinate_system("Global")
 
-            self.build[f"CreatCs_{self.operate_idx}"] = [pivot, "Global", "RotatePivotCS", "axis", [1, 0, 0], [0, 1, 0]]
+            self.build[f"CreatCs_{self.operate_idx}"] = [pivot, "Global", f"RotatePivotCS{idx}", "axis", [1, 0, 0], [0, 1, 0]]
             self.operate_idx += 1
             self.build[f"SetWorkCs_{self.operate_idx}"] = ["LastCreateCs"]
             self.operate_idx += 1
@@ -90,25 +90,24 @@ class Operation:
             idx += 1
 
         modeler.unite(rect_list)
-        self.build[f"Unite_{self.operate_idx}"] = [rect_list]
+        self.build[f"Unite_{self.operate_idx}"] = [rect.name for rect in rect_list]
         self.operate_idx += 1
 
     def RotateBranch(self, branch: int):
         self.branch = branch
         modeler = self.modeler
         metal_ = modeler.duplicate_around_axis("metal", Axis.Z, angle=int(360 / branch), clones=branch)
-        metal = [metal_[0]]
-        for idx in range(branch):
+        metal = ["metal"]
+        for idx in range(1, branch):
             metal.append(metal_[1][idx - 1])
         modeler.unite(metal)
 
         self.build[f"DupAxis_{self.operate_idx}"] = ["metal", "Axis.Z", int(360 / branch), branch]
         self.operate_idx += 1
-        self.build[f"Unite_{self.operate_idx}"] = [metal]
+        self.build[f"Unite_{self.operate_idx}"] = metal
         self.operate_idx += 1
 
     def BoundarySet(self):
-        unit = self.unit
         self.app["angle"] = "0deg"
         self.build["var"]["angle"] = "0deg"
 
@@ -204,6 +203,8 @@ class Operation:
             phase_delay_param2="angle",
             reverse_v=True
         )
+
+        metal_boundary = app.assign_perfect_e(["metal"], name="metal_boundary")
 
     def SetSolution(self, freqs: list, points: int = 50, angles: list = None):
         if angles is None:
@@ -434,5 +435,5 @@ class Operation:
             plt.close()
 
         for detail in self.freqs:
-            plot_one_band(detail[0], detail[1], self.path+f"{detail[0]}~{detail[1]}Ghz_TE.png", raw_data, "TE")
-            plot_one_band(detail[0], detail[1], self.path + f"{detail[0]}~{detail[1]}Ghz_TM.png", raw_data, "TM")
+            plot_one_band(detail[0], detail[1], self.path+f"/{detail[0]}~{detail[1]}Ghz_TE.png", raw_data, "TE")
+            plot_one_band(detail[0], detail[1], self.path + f"/{detail[0]}~{detail[1]}Ghz_TM.png", raw_data, "TM")

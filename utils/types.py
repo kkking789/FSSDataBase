@@ -9,7 +9,6 @@ class Control:
 class Unit:
     size: int
     wire_width: float
-    layer_num: int
 
 @dataclass
 class Config1:
