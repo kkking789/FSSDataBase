@@ -278,15 +278,11 @@ class Operation:
 
         self.subH = bias
 
-    def SetReport(self, direction: str):
+    def SetReport(self):
         app = self.app
         variations = app.available_variations.nominal_values
         variations["angle"] = ["All"]
-
-        if direction == "S11":
-            expressions = ["dB(S(Floquet_Top:1,Floquet_Top:1))","dB(S(Floquet_Top:2,Floquet_Top:2))"]
-        else:
-            expressions = ["dB(S(Floquet_Top:1,Floquet_Bottom:1))","dB(S(Floquet_Top:2,Floquet_Bottom:2))"]
+        expressions = ["dB(S(Floquet_Top:1,Floquet_Top:1))","dB(S(Floquet_Top:2,Floquet_Top:2))",]
         report = app.post.create_report(expressions=expressions, variations=variations)
         self.solutions = report.get_solution_data()
 
@@ -369,7 +365,7 @@ class Operation:
         mask = (np.array(img) > 0).astype(np.uint8)
         np.savetxt(f"{self.path}/mask.csv", mask, delimiter=",", fmt="%d")
 
-    def ResultsGenerate(self, passdB: float = -3, blockdB: float = -10):
+    def ResultsGenerate(self, passdB: float = -5):
         solutions = self.solutions
         expressions = list(solutions.expressions)
         sweep_names = list(solutions._sweeps_names)
@@ -377,36 +373,48 @@ class Operation:
         angle_idx = sweep_names.index("angle")
         freq_idx = sweep_names.index("Freq")
 
-        te_expr = expressions[0]
-        tm_expr = expressions[1]
+        S11_te_expr = expressions[0]
+        S11_tm_expr = expressions[1]
+        S21_te_expr = expressions[2]
+        S21_tm_expr = expressions[3]
 
-        te_real_data = np.asarray(solutions._solutions_real[te_expr], dtype=float)
-        tm_real_data = np.asarray(solutions._solutions_real[tm_expr], dtype=float)
+        S11_te_real_data = np.asarray(solutions._solutions_real[S11_te_expr], dtype=float)
+        S11_tm_real_data = np.asarray(solutions._solutions_real[S11_tm_expr], dtype=float)
+        S21_te_real_data = np.asarray(solutions._solutions_real[S21_te_expr], dtype=float)
+        S21_tm_real_data = np.asarray(solutions._solutions_real[S21_tm_expr], dtype=float)
 
-        angle = te_real_data[:, angle_idx]
-        freq = te_real_data[:, freq_idx]
+        angle = S11_te_real_data[:, angle_idx]
+        freq = S11_te_real_data[:, freq_idx]
 
-        te_real = te_real_data[:, -1]
-        tm_real = tm_real_data[:, -1]
+        S11_te_real = S11_te_real_data[:, -1]
+        S11_tm_real = S11_tm_real_data[:, -1]
+        S21_te_real = S21_te_real_data[:, -1]
+        S21_tm_real = S21_tm_real_data[:, -1]
 
         raw_data = np.column_stack(
-            [angle, freq, te_real, tm_real]
+            [angle, freq, S11_te_real, S11_tm_real, S21_te_real, S21_tm_real]
         )
         angles = np.unique(raw_data[:, 0])
-        te_label = np.where(te_real > passdB, 0, np.where(te_real < -blockdB, -10, -5))
-        tm_label = np.where(tm_real > passdB, 0, np.where(tm_real < -blockdB, -10, -5))
-        label_data = np.column_stack([angle, freq, te_label, tm_label])
+        S11_te_label = np.where(S11_te_real > passdB, 0, -10)
+        S11_tm_label = np.where(S11_tm_real > passdB, 0, -10)
+        S21_te_label = np.where(S21_te_real > passdB, 0, -10)
+        S21_tm_label = np.where(S21_tm_real > passdB, 0, -10)
+        label_data = np.column_stack([angle, freq, S11_te_label, S11_tm_label, S21_te_label, S21_tm_label])
 
         np.savetxt(f"{self.path}/raw_result.csv", raw_data, delimiter=",", fmt="%f")
         np.savetxt(f"{self.path}/label_result.csv", label_data, delimiter=",", fmt="%f")
 
-        def plot_one_band(freq_min: float, freq_max: float, save_path: str, data: np.ndarray, component:str = "TE", angle_tol:float = 1e-3):
+        def plot_one_band(freq_min: float, freq_max: float, save_path: str, data: np.ndarray, component:str, angle_tol:float = 1e-3):
             plt.figure(figsize=(10, 6))
 
-            if component == "TE":
-                value_col = 2
+            if component == "S11TE":
+                idx = 2
+            elif component == "S11TM":
+                idx = 3
+            elif component == "S21TE":
+                idx = 4
             else:
-                value_col = 3
+                idx = 5
 
             for angle in angles:
                 mask_angle = np.isclose(raw_data[:, 0], angle, atol=angle_tol)
@@ -421,7 +429,7 @@ class Operation:
                 order = np.argsort(data_sub[:, 1])
                 data_sub = data_sub[order]
                 freq = data_sub[:, 1]
-                raw_y = data_sub[:, value_col]
+                raw_y = data_sub[:, idx]
 
                 plt.plot(freq, raw_y, linestyle="-", label=f"angle={angle:g}deg")
 
@@ -435,5 +443,7 @@ class Operation:
             plt.close()
 
         for detail in self.freqs:
-            plot_one_band(detail[0], detail[1], self.path+f"/{detail[0]}~{detail[1]}Ghz_TE.png", raw_data, "TE")
-            plot_one_band(detail[0], detail[1], self.path + f"/{detail[0]}~{detail[1]}Ghz_TM.png", raw_data, "TM")
+            plot_one_band(detail[0], detail[1], self.path+f"/{detail[0]}~{detail[1]}Ghz_S11TE.png", raw_data, "S11TE")
+            plot_one_band(detail[0], detail[1], self.path + f"/{detail[0]}~{detail[1]}Ghz_S11TM.png", raw_data, "S11TM")
+            plot_one_band(detail[0], detail[1], self.path + f"/{detail[0]}~{detail[1]}Ghz_S21TE.png", raw_data, "S21TE")
+            plot_one_band(detail[0], detail[1], self.path + f"/{detail[0]}~{detail[1]}Ghz_S21TM.png", raw_data, "S21TM")
