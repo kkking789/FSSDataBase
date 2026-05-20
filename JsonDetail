@@ -22,5 +22,8 @@ build stuff:
     Rotate = rotate
     Unite = unite
     DupAxis = duplicate_around_axis
+    Curve = create_equationbased_curve
+    Line = create_polyline
+    Cover = cover_lines
 
 

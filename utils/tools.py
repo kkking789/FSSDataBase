@@ -20,6 +20,7 @@ class Operation:
     def __init__(self, app: Hfss, path: str):
         self.app = app
         self.modeler = app.modeler
+        self.app.modeler.model_units = "mm"
 
         self.data = []
         self.Zbias = 0
@@ -92,6 +93,94 @@ class Operation:
         modeler.unite(rect_list)
         self.build[f"Unite_{self.operate_idx}"] = [rect.name for rect in rect_list]
         self.operate_idx += 1
+
+    def DrawGroup2(self, data: list, Zbias:float = 0):
+        self.data = data
+        modeler = self.modeler
+        idx = 0
+        metal_list = []
+        cover = None
+        self.Zbias = Zbias
+
+        if type(data[0][0]) == str:
+            for item in self.data:
+                x_up = item[0]
+                y_up = item[1]
+                x_down = item[2]
+                y_down = item[3]
+                x_up_start = item[4][0]
+                y_up_start = item[4][1]
+                x_up_end = item[5][0]
+                y_up_end = item[5][1]
+                x_down_start = item[6][0]
+                y_down_start = item[6][1]
+                x_down_end = item[7][0]
+                y_down_end = item[7][1]
+
+                modeler.create_equationbased_curve(
+                    x_t=f"({x_up})*1mm",
+                    y_t=f"({y_up})*1mm",
+                    z_t=f"({Zbias})*1mm",
+                    name=f"curve_up_{idx}",
+                )
+                self.build[f"Curve_{self.operate_idx}"] = [f"({x_up})*1mm", f"({y_up})*1mm", f"{Zbias}*1mm",f"curve_up_{idx}"]
+                self.operate_idx += 1
+
+                modeler.create_equationbased_curve(
+                    x_t=f"({x_down})*1mm",
+                    y_t=f"({y_down})*1mm",
+                    z_t=f"{Zbias}*1mm",
+                    name=f"curve_down_{idx}"
+                )
+                self.build[f"Curve_{self.operate_idx}"] = [f"({x_down})*1mm", f"({y_down})*1mm", f"{Zbias}*1mm", f"curve_down_{idx}"]
+                self.operate_idx += 1
+
+                start_line = modeler.create_polyline(
+                    points=[
+                        [f"{x_up_start}mm", f"{y_up_start}mm", f"{Zbias}mm"],
+                        [f"{x_down_start}mm", f"{y_down_start}mm", f"{Zbias}mm"],
+                    ],
+                    name=f"connect_start_{idx}",
+                )
+                self.build[f"Line_{self.operate_idx}"] = [[
+                        [f"{x_up_start}mm", f"{y_up_start}mm", f"{Zbias}mm"],
+                        [f"{x_down_start}mm", f"{y_down_start}mm", f"{Zbias}mm"],
+                    ], f"connect_start_{idx}"]
+                self.operate_idx += 1
+
+                end_line = modeler.create_polyline(
+                    points=[
+                        [f"{x_up_end}mm", f"{y_up_end}mm", f"{Zbias}mm"],
+                        [f"{x_down_end}mm", f"{y_down_end}mm", f"{Zbias}mm"],
+                    ],
+                    name=f"connect_end_{idx}",
+                )
+                self.build[f"Line_{self.operate_idx}"] = [[
+                        [f"{x_up_end}mm", f"{y_up_end}mm", f"{Zbias}mm"],
+                        [f"{x_down_end}mm", f"{y_down_end}mm", f"{Zbias}mm"],
+                    ], f"connect_end_{idx}"]
+                self.operate_idx += 1
+
+                modeler.unite([f"curve_up_{idx}", f"curve_down_{idx}",f"connect_start_{idx}",f"connect_end_{idx}"])
+                self.build[f"Unite_{self.operate_idx}"] = [f"curve_up_{idx}", f"curve_down_{idx}",f"connect_start_{idx}",f"connect_end_{idx}"]
+                self.operate_idx += 1
+
+                if cover is None:
+                    cover = modeler.cover_lines(f"curve_up_{idx}")
+                    modeler[f"curve_up_{idx}"].name = "metal"
+                    metal_list.append("metal")
+                else:
+                    cover = modeler.cover_lines(f"curve_up_{idx}")
+                    metal_list.append(f"curve_up_{idx}")
+                self.build[f"Cover_{self.operate_idx}"] = [f"curve_up_{idx}"]
+                self.operate_idx += 1
+
+                idx+=1
+            modeler.unite(metal_list)
+            self.build[f"Unite_{self.operate_idx}"] = metal_list
+
+        else:
+            self.DrawGroup1(data, Zbias)
 
     def RotateBranch(self, branch: int):
         self.branch = branch
@@ -285,7 +374,6 @@ class Operation:
         expressions = ["dB(S(Floquet_Top:1,Floquet_Top:1))","dB(S(Floquet_Top:2,Floquet_Top:2))",]
         report = app.post.create_report(expressions=expressions, variations=variations)
         self.solutions = report.get_solution_data()
-
 
     def JsonGenerate(self, author: str):
         data = {}

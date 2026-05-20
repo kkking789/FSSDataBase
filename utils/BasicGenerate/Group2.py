@@ -67,12 +67,12 @@ class Circular:
                 angle = math.atan2(end_point[1]-start_point[1],end_point[0]-start_point[0])*180/math.pi
                 distance = math.sqrt((start_point[0]-end_point[0])**2 + (start_point[1]-end_point[1])**2)
                 self.wire.append([start_point,angle,distance])
-            return self.wire, self.strategy
+            return self.wire
         else:
             # 曲线生成策略
             w = self.unit.wire_width
             self._catmull_rom(w)
-            return self.fun, self.strategy
+            return self.fun
 
     def _full_points(self):
         points = self.points.copy()
@@ -138,47 +138,62 @@ class Circular:
     def _catmull_rom(self, w: float):
         # catmull_rom 曲线插值算法
         points = self.points[:-1].copy()
-        x_fun = []
-        y_fun = []
-        dx_fun = []
-        dy_fun = []
         for idx in range(len(points)):
-            P0 = points[idx-1]
-            P1 = points[idx]
-            P2 = points[(idx+1)%len(points)]
-            P3 = points[(idx+2)%len(points)]
+            x0, y0 = points[idx-1]
+            x1, y1 = points[idx]
+            x2, y2 = points[(idx+1)%len(points)]
+            x3, y3 = points[(idx+2)%len(points)]
 
-            x0, y0 = _fmt(P0[0]), _fmt(P0[1])
-            x1, y1 = _fmt(P1[0]), _fmt(P1[1])
-            x2, y2 = _fmt(P2[0]), _fmt(P2[1])
-            x3, y3 = _fmt(P3[0]), _fmt(P3[1])
-            t0 = _fmt(idx)
-            t1 = _fmt(idx+1)
+            xt = f"0.5*({2*x1}+{(-x0+x2)}*(_t)+{(2*x0-5*x1+4*x2-x3)}*pow(_t,2)+{(-x0+3*x1-3*x2+x3)}*pow(_t,3))"
+            yt = f"0.5*({2*y1}+{(-y0+y2)}*(_t)+{(2*y0-5*y1+4*y2-y3)}*pow(_t,2)+{(-y0+3*y1-3*y2+y3)}*pow(_t,3))"
 
-            xt = f"0.5*(2*{x1}+(-{x0}+{x2})*(t-{t0})+(2*{x0}-5*{x1}+4*{x2}-{x3})*(t-{t0})^2+(-{x0}+3*{x1}-3*{x2}+{x3})*(t-{t0})^3)"
-            yt = f"0.5*(2*{y1}+(-{y0}+{y2})*(t-{t0})+(2*{y0}-5*{y1}+4*{y2}-{y3})*(t-{t0})^2+(-{y0}+3*{y1}-3*{y2}+{y3})*(t-{t0})^3)"
-            dx = f"0.5*((-{x0}+{x2})+2*(2*{x0}-5*{x1}+4*{x2}-{x3})*(t-{t0})+3*(-{x0}+3*{x1}-3*{x2}+{x3})*(t-{t0})^2)"
-            dy = f"0.5*((-{y0}+{y2})+2*(2*{y0}-5*{y1}+4*{y2}-{y3})*(t-{t0})+3*(-{y0}+3*{y1}-3*{y2}+{y3})*(t-{t0})^2)"
+            ax0 = x1
+            ax1 = 0.5 * (-x0 + x2)
+            ax2 = 0.5 * (2 * x0 - 5 * x1 + 4 * x2 - x3)
+            ax3 = 0.5 * (-x0 + 3 * x1 - 3 * x2 + x3)
 
-            if idx == len(points)-1:
-                condition = f"((t>={t0})*(t<={t1}))"
-            else:
-                condition = f"((t>={t0})*(t<{t1}))"
-            x_fun.append(f"{condition}*({xt})")
-            y_fun.append(f"{condition}*({yt})")
-            dx_fun.append(f"{condition}*({dx})")
-            dy_fun.append(f"{condition}*({dy})")
-        xt = "+".join(x_fun)
-        yt = "+".join(y_fun)
-        dx = "+".join(dx_fun)
-        dy = "+".join(dy_fun)
-        self.center_fun = [xt, yt]
+            ay0 = y1
+            ay1 = 0.5 * (-y0 + y2)
+            ay2 = 0.5 * (2 * y0 - 5 * y1 + 4 * y2 - y3)
+            ay3 = 0.5 * (-y0 + 3 * y1 - 3 * y2 + y3)
 
-        x_up = f"({xt})-{_fmt(w/2)}*({dy})/sqrt(({dx})^2+({dy})^2)"
-        y_up = f"({yt})+{_fmt(w/2)}*({dx})/sqrt(({dx})^2+({dy})^2)"
-        x_down = f"({xt})+{_fmt(w/2)}*({dy})/sqrt(({dx})^2+({dy})^2)"
-        y_down = f"({yt})-{_fmt(w/2)}*({dx})/sqrt(({dx})^2+({dy})^2)"
-        self.fun = [x_up, y_up, x_down, y_down]
+            b0 = ax0 + w * ay1
+            b1 = ax1 + 2 * w * ay2
+            b2 = ax2 + 3 * w * ay3
+            b3 = ax3
+
+            c0 = ay0 - w * ax1
+            c1 = ay1 - 2 * w * ax2
+            c2 = ay2 - 3 * w * ax3
+            c3 = ay3
+
+            x_up = (
+                f"({b0:.10g})"
+                f"+({b1:.10g})*_t"
+                f"+({b2:.10g})*pow(_t,2)"
+                f"+({b3:.10g})*pow(_t,3)"
+            )
+
+            y_up = (
+                f"({c0:.10g})"
+                f"+({c1:.10g})*_t"
+                f"+({c2:.10g})*pow(_t,2)"
+                f"+({c3:.10g})*pow(_t,3)"
+            )
+
+            dx_start = 0.5 * (-x0 + x2)
+            dy_start = 0.5 * (-y0 + y2)
+
+            dx_end = 0.5 * (-x1 + x3)
+            dy_end = 0.5 * (-y1 + y3)
+            x_up_start = x1 + w * dy_start
+            y_up_start = y1 - w * dx_start
+            x_up_end = x2 + w * dy_end
+            y_up_end = y2 - w * dx_end
+
+
+            self.fun.append([x_up, y_up, xt, yt, [x_up_start, y_up_start],[x_up_end, y_up_end], [x1, y1], [x2, y2]])
+            self.center_fun.append([xt, yt])
 
     def _points(self):
         unit_size = self.unit.size
