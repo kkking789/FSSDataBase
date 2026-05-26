@@ -36,5 +36,5 @@ class Material:
 
 @dataclass
 class Substrate:
-    material: Material
+    material: Material | str
     h: float

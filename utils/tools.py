@@ -35,20 +35,21 @@ class Operation:
         self.build = {}
         self.build["var"] = {}
         self.operate_idx = 0
+        self.metal_idx = 0
         self.solutions = None
         self.idx = time.time()
         self.path = path+fr"\{self.idx}"
         os.makedirs(self.path, exist_ok=True)
 
     def DrawGroup1(self, data: list, Zbias:float = 0):
-        self.data = data
+        self.data.append(data)
         modeler = self.modeler
         idx = 0
         rect_list = []
         width = self.unit.wire_width
         self.Zbias = Zbias
 
-        for item in self.data:
+        for item in data:
             begin = item[0]
             angle = item[1]
             distance = item[2]
@@ -63,7 +64,7 @@ class Operation:
             )
             modeler.set_working_coordinate_system(f"RotatePivotCS{idx}")
             if idx == 0:
-                rect_name = "metal"
+                rect_name = f"metal_{self.metal_idx}"
             else:
                 rect_name = f"Rec{idx}"
             rect = modeler.create_rectangle("XY", origin=[0, f"-{width / 2}mm", 0],
@@ -93,16 +94,19 @@ class Operation:
         self.build[f"Unite_{self.operate_idx}"] = [rect.name for rect in rect_list]
         self.operate_idx += 1
 
+        return True
+
     def DrawGroup2(self, data: list, Zbias:float = 0):
-        self.data = data
+        self.data.append(data)
         modeler = self.modeler
+        app = self.app
         idx = 0
         metal_list = []
         cover = None
         self.Zbias = Zbias
 
         if type(data[0][0]) == str:
-            for item in self.data:
+            for item in data:
                 x_up = item[0]
                 y_up = item[1]
                 x_down = item[2]
@@ -166,28 +170,34 @@ class Operation:
 
                 if cover is None:
                     cover = modeler.cover_lines(f"curve_up_{idx}")
-                    modeler[f"curve_up_{idx}"].name = "metal"
-                    metal_list.append("metal")
+                    modeler[f"curve_up_{idx}"].name = f"metal_{self.metal_idx}"
+                    metal_list.append(f"metal_{self.metal_idx}")
                     self.build[f"Cover_{self.operate_idx}"] = [f"curve_up_{idx}"]
                     self.operate_idx += 1
 
-                    self.build[f"Rename_{self.operate_idx}"] = [f"curve_up_{idx}", f"metal"]
+                    self.build[f"Rename_{self.operate_idx}"] = [f"curve_up_{idx}", f"metal_{self.metal_idx}"]
                     self.operate_idx += 1
                 else:
                     cover = modeler.cover_lines(f"curve_up_{idx}")
                     metal_list.append(f"curve_up_{idx}")
                     self.build[f"Cover_{self.operate_idx}"] = [f"curve_up_{idx}"]
                     self.operate_idx += 1
-
+                if not cover:
+                    return False
                 idx+=1
             modeler.unite(metal_list)
             self.build[f"Unite_{self.operate_idx}"] = metal_list
         else:
             self.DrawGroup1(data, Zbias)
 
+        metal_boundary = app.assign_perfect_e([f"metal_{self.metal_idx}"], name=f"metal_boundary_{self.metal_idx}")
+        self.metal_idx += 1
+        return True
+
     def DrawGroup3(self, data: list, Zbias: float = 0):
-        self.data = data
+        self.data.append(data)
         modeler = self.modeler
+        app = self.app
         idx = 0
         metal_list = []
         self.Zbias = Zbias
@@ -214,16 +224,22 @@ class Operation:
         cover = modeler.cover_lines(metal_list[0])
         self.build[f"Cover_{self.operate_idx}"] = [metal_list[0]]
         self.operate_idx += 1
-        modeler[metal_list[0]].name = "metal"
-        self.build[f"Rename_{self.operate_idx}"] = [metal_list[0], f"metal"]
+        modeler[metal_list[0]].name = f"metal_{self.metal_idx}"
+        self.build[f"Rename_{self.operate_idx}"] = [metal_list[0], f"metal_{self.metal_idx}"]
         self.operate_idx += 1
 
+        metal_boundary = app.assign_perfect_e([f"metal_{self.metal_idx}"], name=f"metal_boundary_{self.metal_idx}")
+        self.metal_idx += 1
+        if not cover:
+            return False
+        return True
 
     def RotateBranch(self, branch: int):
         self.branch = branch
         modeler = self.modeler
-        metal_ = modeler.duplicate_around_axis("metal", Axis.Z, angle=int(360 / branch), clones=branch)
-        metal = ["metal"]
+        app =self.app
+        metal_ = modeler.duplicate_around_axis(f"metal_{self.metal_idx}", Axis.Z, angle=int(360 / branch), clones=branch)
+        metal = [f"metal_{self.metal_idx}"]
         for idx in range(1, branch):
             metal.append(metal_[1][idx - 1])
         modeler.unite(metal)
@@ -232,6 +248,9 @@ class Operation:
         self.operate_idx += 1
         self.build[f"Unite_{self.operate_idx}"] = metal
         self.operate_idx += 1
+
+        metal_boundary = app.assign_perfect_e([f"metal_{self.metal_idx}"], name=f"metal_boundary_{self.metal_idx}")
+        self.metal_idx += 1
 
     def BoundarySet(self):
         self.app["angle"] = "0deg"
@@ -330,14 +349,11 @@ class Operation:
             reverse_v=True
         )
 
-        metal_boundary = app.assign_perfect_e(["metal"], name="metal_boundary")
-
-    def SetSolution(self, freqs: list, points: int = 50, angles: list = None):
+    def SetSolution(self, freqs: list, angles: list = None):
         if angles is None:
             angles = []
 
         self.freqs = freqs
-        self.points = points
         self.angles = angles
         app = self.app
 
@@ -347,7 +363,7 @@ class Operation:
             if sweep is None:
                 sweep = setup.create_frequency_sweep(
                     name="LinearStepSweep", unit="GHz", start_frequency=freq[0], stop_frequency=freq[1],
-                    num_of_freq_points=points,
+                    num_of_freq_points=freq[2],
                     save_fields=False
                 )
             else:
@@ -355,7 +371,7 @@ class Operation:
                     range_type="LinearCount",
                     start=freq[0],
                     end=freq[1],
-                    count=points,
+                    count=freq[2],
                     unit="GHz"
                 )
         angle_sweep = None
@@ -394,12 +410,12 @@ class Operation:
         modeler = self.modeler
         d = unit.size*2
         self.d = d
-        bias = 0
+        bias = self.subH
         idx = 0
 
         for detail in subs:
             sub = modeler.create_box([f"-{d / 2}mm", f"-{d / 2}mm", f"{bias}mm"], [f"{d}mm", f"{d}mm", f"{detail.h}mm"],
-                                     name=f"sub{idx}", material=f"{detail.material.name}")
+                                     name=f"sub{idx}", material=f"{detail.material.name if type(detail.material) is Material else detail.material}")
             bias += detail.h
             idx += 1
 
@@ -433,11 +449,10 @@ class Operation:
         for detail in self.subs:
             sub_idx += 1
             data["sub"][f"sub{sub_idx}"] = {
-                "material": detail.material.name,
+                "material": detail.material.name if type(detail.material) is Material else detail.material,
                 "h": detail.h,
             }
         data["range_freq"] = self.freqs
-        data["points"] = self.points
         data["range_angle"] = self.angles
         data["build"] = self.build
 
@@ -445,8 +460,6 @@ class Operation:
             json.dump(data, fp, indent=4)
 
     def PNGandMaskGenerate(self, size: int = 500):
-        image = Image.new("L", (size, size), 0)
-        draw = ImageDraw.Draw(image)
         d = self.d
         width = self.unit.wire_width
 
@@ -538,34 +551,42 @@ class Operation:
 
             return [_world_to_pixel(p) for p in polygon]
 
-        if isinstance(self.data[0][0], str) and len(self.data[0]) == 2:
-            pixel = _group3_fun2pixel(self.data)
-            draw.polygon(pixel, fill=255)
-        else:
-            for item in self.data:
-                if type(item[0]) == str:
-                    x_up = item[0]
-                    y_up = item[1]
-                    x_down = item[2]
-                    y_down = item[3]
-                    pixel = _fun2pixel(x_up, y_up, x_down, y_down)
-                    draw.polygon(pixel, fill=255)
-                else:
-                    begin = item[0]
-                    r = math.sqrt(begin[0]**2+begin[1]**2)
-                    theta = math.atan2(begin[1],begin[0])*180/math.pi
-                    angle = item[1]
-                    distance = item[2]
-                    for idx in range(self.branch):
-                        x = r*math.cos((theta+int(360/self.branch)*idx)/180*math.pi)
-                        y = r*math.sin((theta+int(360/self.branch)*idx)/180*math.pi)
-                        xy = _rec2pixel([x, y], angle + int(360 / self.branch) * idx, distance, width)
-                        draw.polygon(xy, fill=255)
+        def _draw_structure(data, structure_idx):
+            if isinstance(data[0][0], str) and len(data[0]) == 2:
+                pixel = _group3_fun2pixel(data)
+                draw.polygon(pixel, fill=255)
+            else:
+                for item in data:
+                    if type(item[0]) == str:
+                        x_up = item[0]
+                        y_up = item[1]
+                        x_down = item[2]
+                        y_down = item[3]
+                        pixel = _fun2pixel(x_up, y_up, x_down, y_down)
+                        draw.polygon(pixel, fill=255)
+                    else:
+                        begin = item[0]
+                        r = math.sqrt(begin[0]**2+begin[1]**2)
+                        theta = math.atan2(begin[1],begin[0])*180/math.pi
+                        angle = item[1]
+                        distance = item[2]
+                        for idx in range(self.branch):
+                            x = r*math.cos((theta+int(360/self.branch)*idx)/180*math.pi)
+                            y = r*math.sin((theta+int(360/self.branch)*idx)/180*math.pi)
+                            xy = _rec2pixel([x, y], angle + int(360 / self.branch) * idx, distance, width)
+                            draw.polygon(xy, fill=255)
 
-        image.save(self.path + rf"\structure.png")
-        img = Image.open(self.path + rf"\structure.png").convert("L")
-        mask = (np.array(img) > 0).astype(np.uint8)
-        np.savetxt(f"{self.path}/mask.csv", mask, delimiter=",", fmt="%d")
+            image.save(self.path + rf"\structure_{structure_idx}.png")
+            img = Image.open(self.path + rf"\structure_{structure_idx}.png").convert("L")
+            mask = (np.array(img) > 0).astype(np.uint8)
+            np.savetxt(f"{self.path}/mask_{structure_idx}.csv", mask, delimiter=",", fmt="%d")
+
+        idx = 0
+        for data in self.data:
+            image = Image.new("L", (size, size), 0)
+            draw = ImageDraw.Draw(image)
+            _draw_structure(data, idx)
+            idx += 1
 
     def ResultsGenerate(self, passdB: float = -5):
         solutions = self.solutions
@@ -652,3 +673,6 @@ class Operation:
             plot_one_band(detail[0], detail[1], self.path + f"/{detail[0]}~{detail[1]}Ghz_S11TM.png", raw_data, "S11TM")
             plot_one_band(detail[0], detail[1], self.path + f"/{detail[0]}~{detail[1]}Ghz_S21TE.png", raw_data, "S21TE")
             plot_one_band(detail[0], detail[1], self.path + f"/{detail[0]}~{detail[1]}Ghz_S21TM.png", raw_data, "S21TM")
+
+    def RemoveDir(self):
+        os.remove(self.path)

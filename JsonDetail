@@ -25,5 +25,6 @@ build stuff:
     Curve = create_equationbased_curve
     Line = create_polyline
     Cover = cover_lines
+    Rename = object.name
 
 
