@@ -3,12 +3,6 @@ import math
 import utils
 
 
-def _fmt(value: float):
-    if abs(value) < 1e-8:
-        value = 0.0
-    return f"{value:.2f}"
-
-
 class Solid:
     def __init__(self,unit: utils.Unit, config: utils.Config3):
         self.unit = unit
@@ -22,11 +16,12 @@ class Solid:
         self.strategy = None
 
     def generate(self):
-        self.circular_structure, self.strategy = self.circular.generate()
+        self.circular_structure = self.circular.generate()
+        self.strategy = self.circular.strategy
         if self.strategy==1:
             self.structure = self.circular.center_fun
         else:
-            self.structure = [[f"{_fmt(data[0][0])}+{_fmt(data[2])}*t*cos({_fmt(data[1]/180*math.pi)})",
-                               f"{_fmt(data[0][1])}+{_fmt(data[2])}*t*sin({_fmt(data[1]/180*math.pi)})"]
+            self.structure = [[f"{data[0][0]}+{data[2]}*_t*cos({data[1]/180*math.pi})",
+                               f"{data[0][1]}+{data[2]}*_t*sin({data[1]/180*math.pi})"]
                               for data in self.circular_structure]
         return self.structure

@@ -20,7 +20,6 @@ class Operation:
     def __init__(self, app: Hfss, path: str):
         self.app = app
         self.modeler = app.modeler
-        self.app.modeler.model_units = "mm"
 
         self.data = []
         self.Zbias = 0
@@ -169,18 +168,56 @@ class Operation:
                     cover = modeler.cover_lines(f"curve_up_{idx}")
                     modeler[f"curve_up_{idx}"].name = "metal"
                     metal_list.append("metal")
+                    self.build[f"Cover_{self.operate_idx}"] = [f"curve_up_{idx}"]
+                    self.operate_idx += 1
+
+                    self.build[f"Rename_{self.operate_idx}"] = [f"curve_up_{idx}", f"metal"]
+                    self.operate_idx += 1
                 else:
                     cover = modeler.cover_lines(f"curve_up_{idx}")
                     metal_list.append(f"curve_up_{idx}")
-                self.build[f"Cover_{self.operate_idx}"] = [f"curve_up_{idx}"]
-                self.operate_idx += 1
+                    self.build[f"Cover_{self.operate_idx}"] = [f"curve_up_{idx}"]
+                    self.operate_idx += 1
 
                 idx+=1
             modeler.unite(metal_list)
             self.build[f"Unite_{self.operate_idx}"] = metal_list
-
         else:
             self.DrawGroup1(data, Zbias)
+
+    def DrawGroup3(self, data: list, Zbias: float = 0):
+        self.data = data
+        modeler = self.modeler
+        idx = 0
+        metal_list = []
+        self.Zbias = Zbias
+
+        for item in data:
+            x = item[0]
+            y = item[1]
+            modeler.create_equationbased_curve(
+                x_t=f"({x})*1mm",
+                y_t=f"({y})*1mm",
+                z_t=f"({Zbias})*1mm",
+                name=f"curve_{idx}",
+            )
+            self.build[f"Curve_{self.operate_idx}"] = [f"({x})*1mm", f"({y})*1mm", f"{Zbias}*1mm",
+                                                       f"curve_{idx}"]
+            self.operate_idx += 1
+            metal_list.append(f"curve_{idx}")
+            idx += 1
+
+        modeler.unite(metal_list)
+        self.build[f"Unite_{self.operate_idx}"] = metal_list
+        self.operate_idx += 1
+
+        cover = modeler.cover_lines(metal_list[0])
+        self.build[f"Cover_{self.operate_idx}"] = [metal_list[0]]
+        self.operate_idx += 1
+        modeler[metal_list[0]].name = "metal"
+        self.build[f"Rename_{self.operate_idx}"] = [metal_list[0], f"metal"]
+        self.operate_idx += 1
+
 
     def RotateBranch(self, branch: int):
         self.branch = branch
@@ -332,12 +369,13 @@ class Operation:
                         step=angle[2],
                         name="AngleSweep"
                     )
-                angle_sweep.add_variation(
-                    sweep_variable="angle",
-                    start_point=angle[0],
-                    end_point=angle[1],
-                    step=angle[2],
-                )
+                else:
+                    angle_sweep.add_variation(
+                        sweep_variable="angle",
+                        start_point=angle[0],
+                        end_point=angle[1],
+                        step=angle[2],
+                    )
 
     def SetMaterial(self, material: list):
         self.material = material
@@ -371,7 +409,8 @@ class Operation:
         app = self.app
         variations = app.available_variations.nominal_values
         variations["angle"] = ["All"]
-        expressions = ["dB(S(Floquet_Top:1,Floquet_Top:1))","dB(S(Floquet_Top:2,Floquet_Top:2))",]
+        expressions = ["dB(S(Floquet_Top:1,Floquet_Top:1))","dB(S(Floquet_Top:2,Floquet_Top:2))",
+                       "dB(S(Floquet_Top:1,Floquet_Bottom:1))", "dB(S(Floquet_Top:2,Floquet_Bottom:2))"]
         report = app.post.create_report(expressions=expressions, variations=variations)
         self.solutions = report.get_solution_data()
 
@@ -411,7 +450,34 @@ class Operation:
         d = self.d
         width = self.unit.wire_width
 
-        def rec2pixel(point,angle,length,width):
+        safe_env = {
+            "sqrt": math.sqrt,
+            "sin": math.sin,
+            "cos": math.cos,
+            "tan": math.tan,
+            "pow": pow,
+            "abs": abs,
+            "pi": math.pi,
+        }
+
+        def _eval_expr(expr, t):
+            env = dict(safe_env)
+            env["_t"] = float(t)
+            return float(eval(expr, {"__builtins__": {}}, env))
+
+        def _eval_curve(x_expr, y_expr, t):
+            return [
+                _eval_expr(x_expr, t),
+                _eval_expr(y_expr, t),
+            ]
+
+        def _world_to_pixel(point):
+            x, y = point
+            px = x * size / d + size / 2
+            py = size / 2 - y * size / d
+            return (px, py)
+
+        def _rec2pixel(point,angle,length,width):
             x = point[0]*size/d
             y = point[1]*size/d
             rad  = angle/180*math.pi
@@ -436,17 +502,65 @@ class Operation:
 
             return [(x0,y0),(x1,y1),(x2,y2),(x3,y3)]
 
-        for item in self.data:
-            begin = item[0]
-            r = math.sqrt(begin[0]**2+begin[1]**2)
-            theta = math.atan2(begin[1],begin[0])*180/math.pi
-            angle = item[1]
-            distance = item[2]
-            for idx in range(self.branch):
-                x = r*math.cos((theta+int(360/self.branch)*idx)/180*math.pi)
-                y = r*math.sin((theta+int(360/self.branch)*idx)/180*math.pi)
-                xy = rec2pixel([x,y],angle+int(360/self.branch)*idx,distance,width)
-                draw.polygon(xy, fill=255)
+        def _fun2pixel(x_up: str, y_up: str, x_down: str, y_down: str, points=120):
+
+            up_points = [
+                _eval_curve(x_up, y_up, t)
+                for t in np.linspace(0, 1, points)
+            ]
+
+            down_points = [
+                _eval_curve(x_down, y_down, t)
+                for t in np.linspace(0, 1, points)
+            ]
+
+            polygon = up_points + down_points[::-1]
+            polygon = [
+                _world_to_pixel(p)
+                for p in polygon
+            ]
+
+            return polygon
+
+        def _group3_fun2pixel(fun_list, points=120):
+            polygon = []
+
+            for x_expr, y_expr in fun_list:
+                segment = [
+                    _eval_curve(x_expr, y_expr, t)
+                    for t in np.linspace(0, 1, points)
+                ]
+
+                if polygon:
+                    segment = segment[1:]
+
+                polygon.extend(segment)
+
+            return [_world_to_pixel(p) for p in polygon]
+
+        if isinstance(self.data[0][0], str) and len(self.data[0]) == 2:
+            pixel = _group3_fun2pixel(self.data)
+            draw.polygon(pixel, fill=255)
+        else:
+            for item in self.data:
+                if type(item[0]) == str:
+                    x_up = item[0]
+                    y_up = item[1]
+                    x_down = item[2]
+                    y_down = item[3]
+                    pixel = _fun2pixel(x_up, y_up, x_down, y_down)
+                    draw.polygon(pixel, fill=255)
+                else:
+                    begin = item[0]
+                    r = math.sqrt(begin[0]**2+begin[1]**2)
+                    theta = math.atan2(begin[1],begin[0])*180/math.pi
+                    angle = item[1]
+                    distance = item[2]
+                    for idx in range(self.branch):
+                        x = r*math.cos((theta+int(360/self.branch)*idx)/180*math.pi)
+                        y = r*math.sin((theta+int(360/self.branch)*idx)/180*math.pi)
+                        xy = _rec2pixel([x, y], angle + int(360 / self.branch) * idx, distance, width)
+                        draw.polygon(xy, fill=255)
 
         image.save(self.path + rf"\structure.png")
         img = Image.open(self.path + rf"\structure.png").convert("L")
@@ -458,9 +572,6 @@ class Operation:
         expressions = list(solutions.expressions)
         sweep_names = list(solutions._sweeps_names)
 
-        angle_idx = sweep_names.index("angle")
-        freq_idx = sweep_names.index("Freq")
-
         S11_te_expr = expressions[0]
         S11_tm_expr = expressions[1]
         S21_te_expr = expressions[2]
@@ -471,8 +582,14 @@ class Operation:
         S21_te_real_data = np.asarray(solutions._solutions_real[S21_te_expr], dtype=float)
         S21_tm_real_data = np.asarray(solutions._solutions_real[S21_tm_expr], dtype=float)
 
-        angle = S11_te_real_data[:, angle_idx]
+        freq_idx = sweep_names.index("Freq")
         freq = S11_te_real_data[:, freq_idx]
+
+        if "angle" in sweep_names:
+            angle_idx = sweep_names.index("angle")
+            angle = S11_te_real_data[:, angle_idx]
+        else:
+            angle = np.zeros_like(freq)
 
         S11_te_real = S11_te_real_data[:, -1]
         S11_tm_real = S11_tm_real_data[:, -1]
