@@ -8,8 +8,7 @@ material: the project material detail
     dielectric_loss_tangent: the dielectric_loss_tangent of the material
 sub: the project substrate detail
     material: the material name that the substrate use
-    h: the substrate height
-range_freq: the setup freq range
+    h: the substrate heigh=eq: the setup freq range
 points: the total solution points from single freq range
 range_angle: the angle range
 
@@ -17,7 +16,6 @@ build stuff:
     var is to set the project variable
     CreateCs = create_coordinate_system
     SetWorkCs = set_working_coordinate_system
-        When the content is "LastCreateCs",the input should be the return from the last CreateCs
     CreateRec/rectangle = create_rectangle
     Rotate = rotate
     Unite = unite

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from utils.BasicGenerate import CentralConnect
 import utils
-from ansys.aedt.core import Hfss, settings
+from ansys.aedt.core import Hfss
 
 import yaml
 
@@ -30,10 +30,11 @@ def _list_random_pick(data: str|list) -> str:
     else:
         return data
 
-def generate_once(settings_stackup, opt: utils.Operation, unit: utils.Unit,
+def generate_once(settings_stackup, opt: utils.Operation,cache: utils.CacheOperate, unit: utils.Unit,
                   config1 : utils.Config1, config2 : utils.Config2, config3 : utils.Config3,
                   frequency: list, angle: list, app: Hfss, NUM_CORES: int = 1):
     stackup = []
+    flag = False
     if settings_stackup["mode"] == "arrangement":
         arrangement = settings_stackup["arrangement"]
         for detail in reversed(arrangement):
@@ -51,9 +52,10 @@ def generate_once(settings_stackup, opt: utils.Operation, unit: utils.Unit,
         current_dielectric = 0
         if metal_layers > metal_layers-1:
             metal_layers = metal_layers - 1
-        for idx in range(dielectric_layers+1):
+        for idx in range(dielectric_layers+2):
             if idx%2 == 1:
-                stackup.append(["dielectric", _list_random_pick(_random["dielectric_candidates"]), _random_pick(_random["dielectric_h"], float)])
+                dielectric_layer = utils.Substrate(_list_random_pick(_random["dielectric_candidates"]), _random_pick(_random["dielectric_h"], float))
+                stackup.append(["dielectric", dielectric_layer])
                 current_dielectric += 1
             else:
                 if (metal_layers - current_metal+1) == (dielectric_layers - current_dielectric):
@@ -67,13 +69,14 @@ def generate_once(settings_stackup, opt: utils.Operation, unit: utils.Unit,
     h = 0
     for detail in stackup:
         if detail[0] == "dielectric":
-            opt.SubstrateSet([detail[1]], unit)
+            opt.SubstrateSet([detail[1]])
             h += detail[1].h
         elif detail[0] == "metal":
             if detail[1] == "group1":
                 generator = utils.BasicGenerate.CentralConnect(unit, config1)
                 data = generator.generate()
                 flag = opt.DrawGroup1(data, h)
+                opt.RotateBranch(generator.branch)
             elif detail[1] == "group2":
                 generator = utils.BasicGenerate.Circular(unit, config2)
                 data = generator.generate()
@@ -85,11 +88,15 @@ def generate_once(settings_stackup, opt: utils.Operation, unit: utils.Unit,
     if flag:
         opt.BoundarySet()
         opt.SetSolution(frequency, angle)
-        app.analyze(cores=NUM_CORES)
+        opt.Simulate(NUM_CORES)
         opt.SetReport()
         opt.JsonGenerate(author="kxk")
         opt.PNGandMaskGenerate()
-        opt.ResultsGenerate()
+        label_data = opt.ResultsGenerate()
+        split = utils.ResultSplit(label_data, frequency)
+        for freq, angle,S11, S21 in split:
+            cache.write(opt.idx, 0, angle, S11, freq)
+            cache.write(opt.idx, 1, angle, S21, freq)
         app.close_project()
     else:
         print("The generate structure is illegal.")
@@ -135,25 +142,30 @@ def main():
     settings_angle = settings["angle"]
     angle = []
     if settings_angle["enabled"]:
-        angle.append([settings_angle["start"], settings_angle["stop"], settings_angle["count"]])
+        for detail in settings_angle["detail"]:
+            angle.append(detail)
 
     settings_stackup = settings["stackup"]
 
     print("done")
 
     temp_folder = tempfile.TemporaryDirectory(suffix=".ansys")
-    app = Hfss(
-        project=os.path.join(temp_folder.name, f"AngleSelectSurface"),
-        design=f"AngleSelectSurface_Design",
-        version=AEDT_VERSION,
-        non_graphical=False,
-        new_desktop=False,
-    )
+    cache = utils.CacheOperate(path, batch_size=100)
 
-    operation = utils.Operation(app, path)
-    operation.SetMaterial(materials)
-
-    generate_once(settings_stackup, operation,unit,config1,config2,config3, frequency, angle, app, NUM_CORES)
+    for idx in range(samples):
+        app = Hfss(
+            project=os.path.join(temp_folder.name, f"FSS_DataBase"),
+            design=f"FSS_DataBase_Design_{idx}",
+            version=AEDT_VERSION,
+            non_graphical=False,
+            new_desktop=False,
+        )
+        operation = utils.Operation(app, path, unit)
+        operation.SetMaterial(materials)
+        try:
+            generate_once(settings_stackup, operation,cache,unit,config1,config2,config3, frequency, angle, app, NUM_CORES)
+        except:
+            operation.RemoveDir()
 
 
 if __name__ == "__main__":

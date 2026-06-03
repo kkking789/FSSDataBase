@@ -14,17 +14,65 @@ from utils.types import *
 import time
 import numpy as np
 import math
+import shutil
+
+class ResultSplit:
+    def __init__(self, data, freqs: list, extra: float = 0.01):
+        self.angles = np.unique(data[:, 0]).tolist()
+        self.data = data
+        self.freqs = freqs
+        self.extra = extra
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+
+        if not self.angles:
+            raise StopIteration
+
+        angle = self.angles.pop()
+        data = self.data
+        mask_angle = np.isclose(data[:, 0], angle, atol=1e5)
+        data_sub = data[mask_angle]
+        output_S11 = []
+        output_S21 = []
+        output_freq = []
+
+        for freq in self.freqs:
+            mask_band = (data_sub[:, 1] >= freq[0]) & (data_sub[:, 1] <= freq[1])
+            data_sub = data_sub[mask_band]
+
+            if data_sub.shape[0] == 0:
+                continue
+
+            order = np.argsort(data_sub[:, 1])
+            data_sub = data_sub[order]
+
+            output_freq += data_sub[:, 1].tolist()
+            output_freq.append(data_sub[:, 1][-1] + self.extra)
+
+            output_S11 += data_sub[:, 2].astype(np.int8).tolist()
+            output_S11.append(-1)
+
+            output_S21 += data_sub[:, 4].astype(np.int8).tolist()
+            output_S21.append(-1)
+
+        return output_freq, angle, output_S11, output_S21
+
+
+
 
 
 class Operation:
-    def __init__(self, app: Hfss, path: str):
+    def __init__(self, app: Hfss, path: str, unit: Unit):
         self.app = app
         self.modeler = app.modeler
+        self.unit = unit
 
         self.data = []
         self.Zbias = 0
         self.branch = 0
-        self.unit = 0
         self.subH = 0
         self.d = 0
         self.freqs = []
@@ -36,15 +84,20 @@ class Operation:
         self.build["var"] = {}
         self.operate_idx = 0
         self.metal_idx = 0
+        self.global_idx = 0
         self.solutions = None
         self.idx = time.time()
         self.path = path+fr"\{self.idx}"
-        os.makedirs(self.path, exist_ok=True)
+
+        try:
+            os.makedirs(self.path, exist_ok=True)
+        except FileNotFoundError:
+            pass
 
     def DrawGroup1(self, data: list, Zbias:float = 0):
         self.data.append(data)
         modeler = self.modeler
-        idx = 0
+        idx = self.global_idx
         rect_list = []
         width = self.unit.wire_width
         self.Zbias = Zbias
@@ -63,7 +116,7 @@ class Operation:
                 y_pointing=[0, 1, 0],
             )
             modeler.set_working_coordinate_system(f"RotatePivotCS{idx}")
-            if idx == 0:
+            if idx == self.global_idx:
                 rect_name = f"metal_{self.metal_idx}"
             else:
                 rect_name = f"Rec{idx}"
@@ -80,7 +133,7 @@ class Operation:
 
             self.build[f"CreatCs_{self.operate_idx}"] = [pivot, "Global", f"RotatePivotCS{idx}", "axis", [1, 0, 0], [0, 1, 0]]
             self.operate_idx += 1
-            self.build[f"SetWorkCs_{self.operate_idx}"] = ["LastCreateCs"]
+            self.build[f"SetWorkCs_{self.operate_idx}"] = [f"RotatePivotCS{idx}"]
             self.operate_idx += 1
             self.build[f"CreateRec_{self.operate_idx}"] = ["XY", [0, f"-{width / 2}mm", 0], [f"{distance}mm", f"{width}mm"], rect_name]
             self.operate_idx += 1
@@ -93,6 +146,7 @@ class Operation:
         modeler.unite(rect_list)
         self.build[f"Unite_{self.operate_idx}"] = [rect.name for rect in rect_list]
         self.operate_idx += 1
+        self.global_idx = idx
 
         return True
 
@@ -100,7 +154,7 @@ class Operation:
         self.data.append(data)
         modeler = self.modeler
         app = self.app
-        idx = 0
+        idx = self.global_idx
         metal_list = []
         cover = None
         self.Zbias = Zbias
@@ -192,13 +246,16 @@ class Operation:
 
         metal_boundary = app.assign_perfect_e([f"metal_{self.metal_idx}"], name=f"metal_boundary_{self.metal_idx}")
         self.metal_idx += 1
+        self.global_idx = idx
+        if modeler.line_objects:
+            return False
         return True
 
     def DrawGroup3(self, data: list, Zbias: float = 0):
         self.data.append(data)
         modeler = self.modeler
         app = self.app
-        idx = 0
+        idx = self.global_idx
         metal_list = []
         self.Zbias = Zbias
 
@@ -230,7 +287,8 @@ class Operation:
 
         metal_boundary = app.assign_perfect_e([f"metal_{self.metal_idx}"], name=f"metal_boundary_{self.metal_idx}")
         self.metal_idx += 1
-        if not cover:
+        self.global_idx = idx
+        if not cover or modeler.line_objects:
             return False
         return True
 
@@ -403,11 +461,10 @@ class Operation:
             material_.permeability = detail.permeability
             material_.dielectric_loss_tangent = detail.dielectric_loss_tangent
 
-    def SubstrateSet(self, subs: list, unit: Unit):
-        self.subs = subs
-        self.unit = unit
+    def SubstrateSet(self, subs: list):
 
         modeler = self.modeler
+        unit = self.unit
         d = unit.size*2
         self.d = d
         bias = self.subH
@@ -418,8 +475,12 @@ class Operation:
                                      name=f"sub{idx}", material=f"{detail.material.name if type(detail.material) is Material else detail.material}")
             bias += detail.h
             idx += 1
-
+            self.subs.append(detail)
         self.subH = bias
+
+    def Simulate(self, NUM_CORES: int = 1):
+        app = self.app
+        app.analyze(cores=NUM_CORES)
 
     def SetReport(self):
         app = self.app
@@ -440,6 +501,7 @@ class Operation:
         data["idx"] = idx
         data["material"] = {}
         data["sub"] = {}
+        data["unit"] = [self.unit.wire_width, self.unit.size]
         for detail in self.material:
             data["material"][detail.name] ={
                 "permittivity": detail.permittivity,
@@ -570,6 +632,7 @@ class Operation:
                         theta = math.atan2(begin[1],begin[0])*180/math.pi
                         angle = item[1]
                         distance = item[2]
+                        self.branch = 1 if self.branch == 0 else self.branch
                         for idx in range(self.branch):
                             x = r*math.cos((theta+int(360/self.branch)*idx)/180*math.pi)
                             y = r*math.sin((theta+int(360/self.branch)*idx)/180*math.pi)
@@ -674,5 +737,9 @@ class Operation:
             plot_one_band(detail[0], detail[1], self.path + f"/{detail[0]}~{detail[1]}Ghz_S21TE.png", raw_data, "S21TE")
             plot_one_band(detail[0], detail[1], self.path + f"/{detail[0]}~{detail[1]}Ghz_S21TM.png", raw_data, "S21TM")
 
+        return label_data
+
     def RemoveDir(self):
-        os.remove(self.path)
+        self.app.close_desktop()
+        time.sleep(2)
+        shutil.rmtree(self.path)
