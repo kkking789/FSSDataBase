@@ -1,22 +1,54 @@
 AEDT_VERSION: "2023.1"
 NUM_CORES: 20
 path: "C:/Users/24781/Desktop/FSSDataBase/datasets"
-samples: 100
+database: "C:/Users/24781/Desktop/FSSDataBase/database"
+samples: 1
+storage_points: 300
 
 unit:
-  size: 40
+  size: [2,2]
   wire_width: [0.2, 0.6]
 
 materials:
-  F4B:
+  F4BM348:
     permittivity: 3.48
     permeability: 1
     dielectric_loss_tangent: 0.0037
 
-  Rogers5880:
+  F4BM220:
     permittivity: 2.2
     permeability: 1
-    dielectric_loss_tangent: 0.0009
+    dielectric_loss_tangent: 0.0010
+
+  F4BM265:
+    permittivity: 2.65
+    permeability: 1
+    dielectric_loss_tangent: 0.0013
+
+  RogersRO4232:
+    permittivity: 3.2
+    permeability: 1
+    dielectric_loss_tangent: 0.0018
+
+  Rogers6002:
+    permittivity: 2.94
+    permeability: 1
+    dielectric_loss_tangent: 0.0012
+
+  RogersRO6006:
+    permittivity: 6.15
+    permeability: 1
+    dielectric_loss_tangent: 0.0019
+
+  RogersTMM4:
+    permittivity: 4.5
+    permeability: 1
+    dielectric_loss_tangent: 0.002
+
+  RogersTMM6:
+    permittivity: 6
+    permeability: 1
+    dielectric_loss_tangent: 0.0023
 
 generators:
   group1:
@@ -56,9 +88,10 @@ stackup:
   random:
     metal_layers: [1, 6]
     dielectric_layers: [1, 5]
-    dielectric_candidates: ["F4B", "Rogers5880"]
-    dielectric_h: [3,6]
-    metal_candidates: ["group1", "group2", "group3"]
+    dielectric_candidates: ["F4BM348", "F4BM220", "F4BM265","RogersRO4232",
+                            "Rogers6002", "RogersRO6006", "RogersTMM4", "RogersTMM6"]
+    dielectric_h: [1,2]
+    metal_candidates: ["group3"]
 
   arrangement:
     - type: "dielectric"
@@ -76,9 +109,12 @@ stackup:
       group: "group3"
 
 frequency:
-  - [1,10,100]
+  - [1,10,91]
+  - [10,20,101]
+  - [20,30,101]
 
 angle:
-  enabled: False
+  enabled: True
   detail:
     - [0, 30, 2]
+    - [60, 90, 2]

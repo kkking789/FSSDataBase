@@ -4,10 +4,13 @@ import tempfile
 import time
 
 from pathlib import Path
+from unittest import result
 
 from utils.BasicGenerate import CentralConnect
 import utils
 from ansys.aedt.core import Hfss
+import multiprocessing as mp
+import ansys
 
 import yaml
 
@@ -30,11 +33,12 @@ def _list_random_pick(data: str|list) -> str:
     else:
         return data
 
-def generate_once(settings_stackup, opt: utils.Operation,cache: utils.CacheOperate, unit: utils.Unit,
+def generate_once(settings_stackup, opt: utils.Operation, unit: utils.Unit,
                   config1 : utils.Config1, config2 : utils.Config2, config3 : utils.Config3,
                   frequency: list, angle: list, app: Hfss, NUM_CORES: int = 1):
     stackup = []
     flag = False
+    result = {}
     if settings_stackup["mode"] == "arrangement":
         arrangement = settings_stackup["arrangement"]
         for detail in reversed(arrangement):
@@ -94,13 +98,79 @@ def generate_once(settings_stackup, opt: utils.Operation,cache: utils.CacheOpera
         opt.PNGandMaskGenerate()
         label_data = opt.ResultsGenerate()
         split = utils.ResultSplit(label_data, frequency)
-        for freq, angle,S11, S21 in split:
-            cache.write(opt.idx, 0, angle, S11, freq)
-            cache.write(opt.idx, 1, angle, S21, freq)
-        app.close_project()
+        result["sample"] = (str(opt.idx), opt.path, opt.unit.size, opt.subH)
+        result["response"] = []
+        for freq, angle,S11, S21, S11_angle, S21_angle in split:
+            result["response"].append([str(opt.idx), angle, 0, S11, S11_angle, freq])
+            result["response"].append([str(opt.idx), angle, 1, S21, S21_angle, freq])
+        app.close_desktop()
+        time.sleep(2)
     else:
-        print("The generate structure is illegal.")
-        opt.RemoveDir()
+        raise Exception("The generate structure is illegal.")
+
+    return result
+
+def single_epoch(temp_folder, idx, path: str, materials: list, AEDT_VERSION,
+                 settings_stackup, unit: utils.Unit,
+                  config1 : utils.Config1, config2 : utils.Config2, config3 : utils.Config3,
+                  frequency: list, angle: list, NUM_CORES: int, result_queue: mp.Queue):
+
+    ansys.aedt.core.settings.enable_screen_logs = False
+    app = Hfss(
+        project=os.path.join(temp_folder, f"FSS_DataBase_{idx}"),
+        design=f"FSS_DataBase_Design_{idx}",
+        version=AEDT_VERSION,
+        non_graphical=False,
+        new_desktop=True,
+    )
+    operation = utils.Operation(app, path, unit)
+    operation.SetMaterial(materials)
+
+    try:
+        result = generate_once(settings_stackup, operation,unit,config1,config2,config3, frequency, angle, app, NUM_CORES)
+        result_queue.put(result)
+    except Exception as e:
+        print(f"Generate failed.error:{e}")
+        operation.RemoveDir()
+        result_queue.put(None)
+        return
+    if idx % 100 == 0 and idx != 0:
+        app.close_desktop()
+        time.sleep(2)
+
+
+def watchdog(db:utils.DataBaseOperate, cache: utils.CacheOperate, args, timeout=3600):
+    q = mp.Queue()
+    p = mp.Process(target=single_epoch, args=args+(q, ))
+    p.start()
+    p.join(timeout)
+
+    if p.exitcode == 0:
+        if q.empty():
+            return False
+        result = q.get()
+        if result is None:
+            return False
+        db.insert_sample(result["sample"][0], result["sample"][1],
+                         result["sample"][2], result["sample"][3])
+        for resp in result["response"]:
+            norm, phase = cache.write(resp[0], resp[2], resp[1], resp[3], resp[4], resp[5])
+            db.insert_response(resp[0], resp[1], resp[2], norm, phase)
+
+        db.commit()
+
+    if p.is_alive():
+        print("The generate_once process has terminated.")
+        p.terminate()
+        p.join(30)
+
+        if p.is_alive():
+            p.kill()
+            p.join()
+
+        return False
+
+    return p.exitcode == 0
 
 def main():
     print("loading settings ...")
@@ -109,11 +179,11 @@ def main():
     AEDT_VERSION = settings["AEDT_VERSION"]
     NUM_CORES = settings["NUM_CORES"]
     path = settings["path"]
+    db_path = settings["database"]
     samples = settings["samples"]
+    points = settings["storage_points"]
 
     settings_unit = settings["unit"]
-    unit = utils.Unit(settings_unit["size"],
-                        _random_pick(settings_unit["wire_width"], float))
 
     settings_material = settings["materials"]
     materials = []
@@ -150,22 +220,22 @@ def main():
     print("done")
 
     temp_folder = tempfile.TemporaryDirectory(suffix=".ansys")
-    cache = utils.CacheOperate(path, batch_size=100)
+    temp_root = temp_folder.name
+    cache = utils.CacheOperate(path, batch_size=100, points=points)
+    db = utils.DataBaseOperate(db_path, points=points)
 
     for idx in range(samples):
-        app = Hfss(
-            project=os.path.join(temp_folder.name, f"FSS_DataBase"),
-            design=f"FSS_DataBase_Design_{idx}",
-            version=AEDT_VERSION,
-            non_graphical=False,
-            new_desktop=False,
-        )
-        operation = utils.Operation(app, path, unit)
-        operation.SetMaterial(materials)
-        try:
-            generate_once(settings_stackup, operation,cache,unit,config1,config2,config3, frequency, angle, app, NUM_CORES)
-        except:
-            operation.RemoveDir()
+        print(f"{idx}/{samples}")
+
+        unit = utils.Unit(_random_pick(settings_unit["size"], int),
+                          _random_pick(settings_unit["wire_width"], float))
+
+        ok = watchdog(db, cache, (temp_root, idx, path, materials, AEDT_VERSION, settings_stackup,unit,config1,config2,config3, frequency, angle, NUM_CORES))
+        if not ok:
+            print(f"Generate failed")
+
+    db.close()
+    cache.flush()
 
 
 if __name__ == "__main__":

@@ -33,15 +33,17 @@ class ResultSplit:
 
         angle = self.angles.pop()
         data = self.data
-        mask_angle = np.isclose(data[:, 0], angle, atol=1e5)
-        data_sub = data[mask_angle]
+        mask_angle = np.isclose(data[:, 0], angle, atol=1e-3)
+        data_sub_ = data[mask_angle]
         output_S11 = []
         output_S21 = []
+        output_S11_angle = []
+        output_S21_angle = []
         output_freq = []
 
         for freq in self.freqs:
-            mask_band = (data_sub[:, 1] >= freq[0]) & (data_sub[:, 1] <= freq[1])
-            data_sub = data_sub[mask_band]
+            mask_band = (data_sub_[:, 1] >= freq[0]) & (data_sub_[:, 1] <= freq[1])
+            data_sub = data_sub_[mask_band]
 
             if data_sub.shape[0] == 0:
                 continue
@@ -53,12 +55,18 @@ class ResultSplit:
             output_freq.append(data_sub[:, 1][-1] + self.extra)
 
             output_S11 += data_sub[:, 2].astype(np.int8).tolist()
-            output_S11.append(-1)
+            output_S11.append(0)
 
             output_S21 += data_sub[:, 4].astype(np.int8).tolist()
-            output_S21.append(-1)
+            output_S21.append(0)
 
-        return output_freq, angle, output_S11, output_S21
+            output_S11_angle += data_sub[:, 6].astype(np.float16).tolist()
+            output_S11_angle.append(np.nan)
+
+            output_S21_angle += data_sub[:, 8].astype(np.float16).tolist()
+            output_S21_angle.append(np.nan)
+
+        return output_freq, angle, output_S11, output_S21, output_S11_angle, output_S21_angle
 
 
 
@@ -85,7 +93,7 @@ class Operation:
         self.operate_idx = 0
         self.metal_idx = 0
         self.global_idx = 0
-        self.solutions = None
+        self.solutions = []
         self.idx = time.time()
         self.path = path+fr"\{self.idx}"
 
@@ -151,7 +159,6 @@ class Operation:
         return True
 
     def DrawGroup2(self, data: list, Zbias:float = 0):
-        self.data.append(data)
         modeler = self.modeler
         app = self.app
         idx = self.global_idx
@@ -160,6 +167,7 @@ class Operation:
         self.Zbias = Zbias
 
         if type(data[0][0]) == str:
+            self.data.append(data)
             for item in data:
                 x_up = item[0]
                 y_up = item[1]
@@ -241,12 +249,13 @@ class Operation:
                 idx+=1
             modeler.unite(metal_list)
             self.build[f"Unite_{self.operate_idx}"] = metal_list
+            self.operate_idx += 1
+            self.global_idx = idx
         else:
             self.DrawGroup1(data, Zbias)
 
         metal_boundary = app.assign_perfect_e([f"metal_{self.metal_idx}"], name=f"metal_boundary_{self.metal_idx}")
         self.metal_idx += 1
-        self.global_idx = idx
         if modeler.line_objects:
             return False
         return True
@@ -415,41 +424,39 @@ class Operation:
         self.angles = angles
         app = self.app
 
-        setup = app.create_setup("Setup1")
-        sweep = None
-        for freq in freqs:
-            if sweep is None:
-                sweep = setup.create_frequency_sweep(
-                    name="LinearStepSweep", unit="GHz", start_frequency=freq[0], stop_frequency=freq[1],
-                    num_of_freq_points=freq[2],
-                    save_fields=False
-                )
-            else:
-                sweep.add_subrange(
-                    range_type="LinearCount",
-                    start=freq[0],
-                    end=freq[1],
-                    count=freq[2],
-                    unit="GHz"
-                )
-        angle_sweep = None
+        for cnt, freq in enumerate(freqs):
+            setup = app.create_setup(f"setup{cnt}", )
+            setup.props["Frequency"] = f"{(freq[0]+freq[1])/2}GHz"
+            setup.props["MaximumPasses"] = 12
+            setup.props["MaxDeltaS"] = 0.03
+            sweep = setup.create_frequency_sweep(
+                name="LinearStepSweep", unit="GHz",
+                start_frequency=freq[0] if cnt == 0 else freq[0] + 1e-3,
+                stop_frequency=freq[1],
+                num_of_freq_points=freq[2],
+                save_fields=False
+            )
+
         if angles is not None:
-            for angle in angles:
-                if angle_sweep is None:
-                    angle_sweep = app.parametrics.add(
-                        variable="angle",
-                        start_point=angle[0],
-                        end_point=angle[1],
-                        step=angle[2],
-                        name="AngleSweep"
-                    )
-                else:
-                    angle_sweep.add_variation(
-                        sweep_variable="angle",
-                        start_point=angle[0],
-                        end_point=angle[1],
-                        step=angle[2],
-                    )
+            for cnt, _ in enumerate(freqs):
+                angle_sweep = None
+                for angle in angles:
+                    if angle_sweep is None:
+                        angle_sweep = app.parametrics.add(
+                            variable="angle",
+                            start_point=angle[0],
+                            end_point=angle[1],
+                            step=angle[2],
+                            name=f"AngleSweep{cnt}",
+                            solution=f"setup{cnt}"
+                        )
+                    else:
+                        angle_sweep.add_variation(
+                            sweep_variable="angle",
+                            start_point=angle[0],
+                            end_point=angle[1],
+                            step=angle[2],
+                        )
 
     def SetMaterial(self, material: list):
         self.material = material
@@ -487,9 +494,12 @@ class Operation:
         variations = app.available_variations.nominal_values
         variations["angle"] = ["All"]
         expressions = ["dB(S(Floquet_Top:1,Floquet_Top:1))","dB(S(Floquet_Top:2,Floquet_Top:2))",
-                       "dB(S(Floquet_Top:1,Floquet_Bottom:1))", "dB(S(Floquet_Top:2,Floquet_Bottom:2))"]
-        report = app.post.create_report(expressions=expressions, variations=variations)
-        self.solutions = report.get_solution_data()
+                       "dB(S(Floquet_Bottom:1,Floquet_Top:1))", "dB(S(Floquet_Bottom:2,Floquet_Top:2))",
+                       "ang_deg(S(Floquet_Top:1,Floquet_Top:1))","ang_deg(S(Floquet_Top:2,Floquet_Top:2))",
+                       "ang_deg(S(Floquet_Bottom:1,Floquet_Top:1))", "ang_deg(S(Floquet_Bottom:2,Floquet_Top:2))"]
+        for idx, _ in enumerate(self.freqs):
+            report = app.post.create_report(expressions=expressions, variations=variations, setup_sweep_name=f"setup{idx}")
+            self.solutions.append(report.get_solution_data())
 
     def JsonGenerate(self, author: str):
         data = {}
@@ -652,43 +662,69 @@ class Operation:
             idx += 1
 
     def ResultsGenerate(self, passdB: float = -5):
-        solutions = self.solutions
-        expressions = list(solutions.expressions)
-        sweep_names = list(solutions._sweeps_names)
+        freq = []
+        angle = []
+        S11_te_real = []
+        S11_tm_real = []
+        S21_te_real = []
+        S21_tm_real = []
+        S11_te_angle = []
+        S11_tm_angle = []
+        S21_te_angle = []
+        S21_tm_angle = []
 
-        S11_te_expr = expressions[0]
-        S11_tm_expr = expressions[1]
-        S21_te_expr = expressions[2]
-        S21_tm_expr = expressions[3]
+        for solution in self.solutions:
+            sweep_names = list(solution._sweeps_names)
 
-        S11_te_real_data = np.asarray(solutions._solutions_real[S11_te_expr], dtype=float)
-        S11_tm_real_data = np.asarray(solutions._solutions_real[S11_tm_expr], dtype=float)
-        S21_te_real_data = np.asarray(solutions._solutions_real[S21_te_expr], dtype=float)
-        S21_tm_real_data = np.asarray(solutions._solutions_real[S21_tm_expr], dtype=float)
+            S11_te_real_data = np.asarray(solution._solutions_real["dB(S(Floquet_Top:1,Floquet_Top:1))"], dtype=float)
+            S11_tm_real_data = np.asarray(solution._solutions_real["dB(S(Floquet_Top:2,Floquet_Top:2))"], dtype=float)
+            S21_te_real_data = np.asarray(solution._solutions_real["dB(S(Floquet_Bottom:1,Floquet_Top:1))"], dtype=float)
+            S21_tm_real_data = np.asarray(solution._solutions_real["dB(S(Floquet_Bottom:2,Floquet_Top:2))"], dtype=float)
+            S11_te_real_angle_data = np.asarray(solution._solutions_real["ang_deg(S(Floquet_Top:1,Floquet_Top:1))"], dtype=float)
+            S11_tm_real_angle_data = np.asarray(solution._solutions_real["ang_deg(S(Floquet_Top:2,Floquet_Top:2))"], dtype=float)
+            S21_te_real_angle_data = np.asarray(solution._solutions_real["ang_deg(S(Floquet_Bottom:1,Floquet_Top:1))"], dtype=float)
+            S21_tm_real_angle_data = np.asarray(solution._solutions_real["ang_deg(S(Floquet_Bottom:2,Floquet_Top:2))"], dtype=float)
 
-        freq_idx = sweep_names.index("Freq")
-        freq = S11_te_real_data[:, freq_idx]
+            freq_idx = sweep_names.index("Freq")
+            freq.append(S11_te_real_data[:, freq_idx])
 
-        if "angle" in sweep_names:
-            angle_idx = sweep_names.index("angle")
-            angle = S11_te_real_data[:, angle_idx]
-        else:
-            angle = np.zeros_like(freq)
+            if "angle" in sweep_names:
+                angle_idx = sweep_names.index("angle")
+                angle.append(S11_te_real_data[:, angle_idx])
+            else:
+                angle.append(np.zeros_like(S11_te_real_data[:, freq_idx]))
 
-        S11_te_real = S11_te_real_data[:, -1]
-        S11_tm_real = S11_tm_real_data[:, -1]
-        S21_te_real = S21_te_real_data[:, -1]
-        S21_tm_real = S21_tm_real_data[:, -1]
+            S11_te_real.append(S11_te_real_data[:, -1])
+            S11_tm_real.append(S11_tm_real_data[:, -1])
+            S21_te_real.append(S21_te_real_data[:, -1])
+            S21_tm_real.append(S21_tm_real_data[:, -1])
+            S11_te_angle.append(S11_te_real_angle_data[:, -1])
+            S11_tm_angle.append(S11_tm_real_angle_data[:, -1])
+            S21_te_angle.append(S21_te_real_angle_data[:, -1])
+            S21_tm_angle.append(S21_tm_real_angle_data[:, -1])
+
+        freq = np.concatenate(freq)
+        angle = np.concatenate(angle)
+        S11_te_real = np.concatenate(S11_te_real)
+        S11_tm_real = np.concatenate(S11_tm_real)
+        S21_te_real = np.concatenate(S21_te_real)
+        S21_tm_real = np.concatenate(S21_tm_real)
+        S11_te_angle = np.concatenate(S11_te_angle)
+        S11_tm_angle = np.concatenate(S11_tm_angle)
+        S21_te_angle = np.concatenate(S21_te_angle)
+        S21_tm_angle = np.concatenate(S21_tm_angle)
 
         raw_data = np.column_stack(
-            [angle, freq, S11_te_real, S11_tm_real, S21_te_real, S21_tm_real]
+            [angle, freq, S11_te_real, S11_tm_real, S21_te_real, S21_tm_real,
+             S11_te_angle, S11_tm_angle, S21_te_angle,S21_tm_angle]
         )
         angles = np.unique(raw_data[:, 0])
-        S11_te_label = np.where(S11_te_real > passdB, 0, -10)
-        S11_tm_label = np.where(S11_tm_real > passdB, 0, -10)
-        S21_te_label = np.where(S21_te_real > passdB, 0, -10)
-        S21_tm_label = np.where(S21_tm_real > passdB, 0, -10)
-        label_data = np.column_stack([angle, freq, S11_te_label, S11_tm_label, S21_te_label, S21_tm_label])
+        S11_te_label = np.where(S11_te_real > passdB, 1, -1)
+        S11_tm_label = np.where(S11_tm_real > passdB, 1, -1)
+        S21_te_label = np.where(S21_te_real > passdB, 1, -1)
+        S21_tm_label = np.where(S21_tm_real > passdB, 1, -1)
+        label_data = np.column_stack([angle, freq, S11_te_label, S11_tm_label, S21_te_label, S21_tm_label,
+                                      S11_te_angle, S11_tm_angle, S21_te_angle,S21_tm_angle])
 
         np.savetxt(f"{self.path}/raw_result.csv", raw_data, delimiter=",", fmt="%f")
         np.savetxt(f"{self.path}/label_result.csv", label_data, delimiter=",", fmt="%f")
@@ -697,13 +733,29 @@ class Operation:
             plt.figure(figsize=(10, 6))
 
             if component == "S11TE":
+                plt.ylabel("dB")
                 idx = 2
             elif component == "S11TM":
+                plt.ylabel("dB")
                 idx = 3
             elif component == "S21TE":
+                plt.ylabel("dB")
                 idx = 4
-            else:
+            elif component == "S21TM":
+                plt.ylabel("dB")
                 idx = 5
+            elif component == "S11TE_angle":
+                plt.ylabel("degree")
+                idx = 6
+            elif component == "S11TM_angle":
+                plt.ylabel("degree")
+                idx = 7
+            elif component == "S21TE_angle":
+                plt.ylabel("degree")
+                idx = 8
+            else:
+                plt.ylabel("degree")
+                idx = 9
 
             for angle in angles:
                 mask_angle = np.isclose(raw_data[:, 0], angle, atol=angle_tol)
@@ -723,7 +775,6 @@ class Operation:
                 plt.plot(freq, raw_y, linestyle="-", label=f"angle={angle:g}deg")
 
             plt.xlabel("Frequency (GHz)")
-            plt.ylabel(f"dB")
             plt.title(f"idx{self.idx} simulate {component} result")
             plt.grid(True)
             plt.legend()
@@ -736,6 +787,12 @@ class Operation:
             plot_one_band(detail[0], detail[1], self.path + f"/{detail[0]}~{detail[1]}Ghz_S11TM.png", raw_data, "S11TM")
             plot_one_band(detail[0], detail[1], self.path + f"/{detail[0]}~{detail[1]}Ghz_S21TE.png", raw_data, "S21TE")
             plot_one_band(detail[0], detail[1], self.path + f"/{detail[0]}~{detail[1]}Ghz_S21TM.png", raw_data, "S21TM")
+            plot_one_band(detail[0], detail[1], self.path + f"/{detail[0]}~{detail[1]}Ghz_S11TE_angle.png", raw_data, "S11TE_angle")
+            plot_one_band(detail[0], detail[1], self.path + f"/{detail[0]}~{detail[1]}Ghz_S11TM_angle.png", raw_data, "S11TM_angle")
+            plot_one_band(detail[0], detail[1], self.path + f"/{detail[0]}~{detail[1]}Ghz_S21TE_angle.png", raw_data,
+                          "S21TE_angle")
+            plot_one_band(detail[0], detail[1], self.path + f"/{detail[0]}~{detail[1]}Ghz_S21TM_angle.png", raw_data,
+                          "S21TM_angle")
 
         return label_data
 

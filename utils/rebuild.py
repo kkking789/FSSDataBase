@@ -16,13 +16,13 @@ _AXIS_MAP = {
 _BUILD_KEY_RE = re.compile(r"^([A-Za-z]+)_(\d+)$")
 
 class Rebuild:
-    def __init__(self, data_path: str, project_path: str, AEDT_VERSION: str = "2023.1"):
+    def __init__(self, data_path: str, project_path: str, idx:int = 0, AEDT_VERSION: str = "2023.1"):
         data_path = str(Path(data_path).expanduser().resolve())
         project_path = str(Path(project_path).expanduser().resolve())
 
         app = Hfss(
             project=os.path.join(project_path, f"Rebuild"),
-            design=f"RebuildDesign",
+            design=f"RebuildDesign{idx}",
             version=AEDT_VERSION,
             non_graphical=False,
             new_desktop=False,
