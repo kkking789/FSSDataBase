@@ -1,4 +1,5 @@
 import os
+import queue
 import random
 import tempfile
 import time
@@ -103,7 +104,7 @@ def generate_once(settings_stackup, opt: utils.Operation, unit: utils.Unit,
         for freq, angle,S11, S21, S11_angle, S21_angle in split:
             result["response"].append([str(opt.idx), angle, 0, S11, S11_angle, freq])
             result["response"].append([str(opt.idx), angle, 1, S21, S21_angle, freq])
-        app.close_desktop()
+        app.close_project()
         time.sleep(2)
     else:
         raise Exception("The generate structure is illegal.")
@@ -120,8 +121,8 @@ def single_epoch(temp_folder, idx, path: str, materials: list, AEDT_VERSION,
         project=os.path.join(temp_folder, f"FSS_DataBase_{idx}"),
         design=f"FSS_DataBase_Design_{idx}",
         version=AEDT_VERSION,
-        non_graphical=False,
-        new_desktop=True,
+        non_graphical=True,
+        new_desktop=False,
     )
     operation = utils.Operation(app, path, unit)
     operation.SetMaterial(materials)
@@ -138,19 +139,27 @@ def single_epoch(temp_folder, idx, path: str, materials: list, AEDT_VERSION,
         app.close_desktop()
         time.sleep(2)
 
+    return
 
-def watchdog(db:utils.DataBaseOperate, cache: utils.CacheOperate, args, timeout=3600):
+def watchdog(db:utils.DataBaseOperate, cache: utils.CacheOperate, args, timeout=36000):
     q = mp.Queue()
     p = mp.Process(target=single_epoch, args=args+(q, ))
     p.start()
-    p.join(timeout)
 
-    if p.exitcode == 0:
-        if q.empty():
-            return False
-        result = q.get()
-        if result is None:
-            return False
+    result = None
+    get_result = False
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            result = q.get(timeout=1)
+            get_result = True
+            break
+        except queue.Empty:
+            if not p.is_alive():
+                break
+
+    if get_result and result is not None:
+        p.join(30)
         db.insert_sample(result["sample"][0], result["sample"][1],
                          result["sample"][2], result["sample"][3])
         for resp in result["response"]:
