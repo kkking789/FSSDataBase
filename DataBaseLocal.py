@@ -123,6 +123,7 @@ def single_epoch(temp_folder, idx, path: str, materials: list, AEDT_VERSION,
         version=AEDT_VERSION,
         non_graphical=True,
         new_desktop=False,
+        close_on_exit=True
     )
     operation = utils.Operation(app, path, unit)
     operation.SetMaterial(materials)
